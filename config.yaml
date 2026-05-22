@@ -1,0 +1,73 @@
+# =============================================================
+# AIGEOLAB v1 — Parcel Boundary Segmentation (Bangladesh)
+# All tunable knobs in one place. Both notebooks read from here.
+#
+# `env` selects the path block to use. Notebooks auto-detect Colab
+# and pick `colab`; on Windows the local-prep script falls back to
+# `windows`.
+# =============================================================
+
+env: colab          # "colab" | "windows"
+
+paths:
+  colab:
+    bangladesh_root: "/content/drive/MyDrive/Bangladesh"          # the Drive shortcut you added to your MyDrive
+    labels_root:     "/content/AIGEOLAB_OFFICE/labeled_data/01.Digitizing_Upload"
+    staging_root:    "/content/drive/MyDrive/aigeolab_train"
+    unrar_bin:       "unrar"                                       # provided by apt-get install -y unrar
+  windows:
+    bangladesh_root: "G:/.shortcut-targets-by-id/13ktsk51AvQd_2LYw_E8mYZSlap9eCLBs/Bangladesh"
+    labels_root:     "f:/personal/AIGEOLAB_OFFICE/labeled_data/01.Digitizing_Upload"
+    staging_root:    "G:/My Drive/aigeolab_train"
+    unrar_bin:       "C:/Program Files/WinRAR/Rar.exe"
+
+# The single AOI that covers the DHAMRAI labels (verified by SHP bbox intersection):
+aoi_imagery:  "AOI5_new"
+aoi_lidar:    "LiDAR_Area5"
+
+prep:
+  label_batches:
+    - "03.251222"
+    - "04.251226"
+  max_mouzas: 2        # 2 = validation; raise to 6 then null once v1 trains
+  drop_partial: true
+
+dataset:
+  patch_size: 512
+  stride: 256                  # 50% overlap
+  drop_empty_patches: true
+  boundary_thickness_px: 3
+
+split:
+  val_mouza_fraction: 0.2
+  seed: 42
+
+model:
+  arch: "Unet"
+  encoder: "resnet34"
+  encoder_weights: "imagenet"
+  in_channels: 3
+  classes: 1                   # binary boundary
+
+train:
+  batch_size: 16
+  epochs: 50
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  amp: true
+  num_workers: 2               # Colab works best with 2
+  loss:
+    bce_weight: 0.5
+    dice_weight: 0.5
+  scheduler: "cosine"
+
+eval:
+  threshold: 0.5
+  metrics: ["iou", "f1"]
+
+augment:
+  hflip_p: 0.5
+  vflip_p: 0.5
+  rot90_p: 0.5
+  brightness: 0.1
+  contrast: 0.1
