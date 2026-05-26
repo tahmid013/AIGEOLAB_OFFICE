@@ -1,10 +1,14 @@
 # =============================================================
-# AIGEOLAB v1 — Parcel Boundary Segmentation (Bangladesh)
-# All tunable knobs in one place. Both notebooks read from here.
+# AIGEOLAB v2.0 — Multi-task parcel detection (Bangladesh)
+#
+# v2.0 (this) — UNet++ with 3 output heads (boundary line + interior
+#   mask + corner heatmap), corner-guided rect/trapezoid fitting,
+#   selectable land-use classifier (CLIP zero-shot OR heuristic).
+# v1.x (previous) — single-output U-Net + heuristic min-area-rect snap.
 #
 # `env` selects the path block to use. Notebooks auto-detect Colab
 # and pick `colab`; on Windows the local-prep script falls back to
-# `windows`.
+# `windows`. Both blocks point to the SAME shared Drive folder.
 # =============================================================
 
 env: colab          # "colab" | "windows"
@@ -29,36 +33,47 @@ prep:
   label_batches:
     - "03.251222"
     - "04.251226"
-  max_mouzas: 6        # v1.2 default: 5 train + 1 val mouzas (real baseline); set to null for all 16
+  max_mouzas: 6        # default: 5 train + 1 val mouzas; set to null for all 16
   drop_partial: true
 
 dataset:
   patch_size: 512
   stride: 256                  # 50% overlap
   drop_empty_patches: true
-  boundary_thickness_px: 3
+  boundary_thickness_px: 3     # width of the 'fence-line' GT
+  interior_erode_px: 3         # erode filled-polygon GT inward so it doesn't overlap the boundary band
+  corner_sigma_px: 4           # gaussian std for the corner/junction heatmap GT
 
 split:
   val_mouza_fraction: 0.2
   seed: 42
 
+# v2.0 model: multi-task UNet++ with 3 sigmoid output channels.
+# Channel order (matches src/inference.py and 02_train_colab.ipynb):
+#   0 = boundary line   (1-px-ish fence with thickness `boundary_thickness_px`)
+#   1 = interior mask   (plot bodies, eroded to avoid the boundary band)
+#   2 = corner heatmap  (gaussian peaks at every polygon vertex / junction)
 model:
-  arch: "Unet"
-  encoder: "resnet34"
+  arch: "UnetPlusPlus"
+  encoder: "efficientnet-b3"
   encoder_weights: "imagenet"
   in_channels: 3
-  classes: 1                   # binary boundary
+  classes: 3
 
 train:
-  batch_size: 16
+  batch_size: 12               # b3 + UNet++ uses more memory than v1's resnet34 U-Net
   epochs: 50
   lr: 1.0e-4
   weight_decay: 1.0e-4
   amp: true
-  num_workers: 2               # Colab works best with 2
+  num_workers: 2
   loss:
-    bce_weight: 0.5
-    dice_weight: 0.5
+    bce_weight:   0.5
+    dice_weight:  0.5
+    # Per-head weighting for the multi-task objective:
+    boundary_weight: 0.45
+    interior_weight: 0.40
+    corners_weight:  0.15
   scheduler: "cosine"
 
 eval:
@@ -71,3 +86,66 @@ augment:
   rot90_p: 0.5
   brightness: 0.1
   contrast: 0.1
+
+# v2.0 polygon vectoriser settings (used by src/inference.extract_polygons).
+# Strategy: take connected components of the INTERIOR head (cleaner than inverting
+# a broken boundary), extract the contour, then try fits in this order and keep
+# whichever exceeds its IoU threshold against the contour:
+#   1. oriented rectangle (min-area-rect)
+#   2. trapezoid (best 4-gon with one pair of parallel sides)
+#   3. general convex quadrilateral
+#   4. fallback: RDP-simplified general polygon
+# Corner-heatmap peaks within `corner_search_band_px` of the contour replace
+# vertex positions when stronger.
+polygons:
+  source:                  "interior"   # "interior" | "boundary_inverted"
+  interior_threshold:      0.50
+  boundary_threshold:      0.40         # only used when source = boundary_inverted
+  corner_threshold:        0.30
+  corner_search_band_px:   12
+  close_kernel:            3
+  min_area_px:             400
+  approx_eps_frac:         0.015
+  rect_iou_threshold:      0.86
+  trapezoid_iou_threshold: 0.82
+  quad_iou_threshold:      0.78
+
+# Land-use classifier. v2.0 ships BOTH backends so the webapp can toggle.
+# 'clip' is much more accurate but adds ~150 MB model download + 3-5 s per tile.
+# 'heuristic' is dependency-free RGB+HSV+texture rules (kept from v1.3).
+classifier:
+  default_backend: "clip"        # "clip" | "heuristic"
+  clip:
+    model_name: "ViT-B-32"
+    pretrained: "openai"
+    crop_padding_frac: 0.05      # expand polygon bbox by this fraction before cropping for CLIP
+    min_crop_px: 64              # below this the crop is too small to classify reliably
+  classes:
+    - name: "cultivated field"
+      colour: [124, 191, 60]
+      clip_prompts:
+        - "an aerial photograph of a green cultivated rice or vegetable field"
+        - "a satellite view of a farmed crop field with visible rows"
+    - name: "vegetation/fallow"
+      colour: [160, 200, 100]
+      clip_prompts:
+        - "an aerial photograph of fallow vegetated land or bushes"
+        - "a satellite view of low scrub vegetation or grassland"
+    - name: "pond / water"
+      colour: [70, 145, 220]
+      clip_prompts:
+        - "an aerial photograph of a small rural pond or water body"
+        - "a top-down view of a still water surface"
+    - name: "built-up / house"
+      colour: [240, 100, 80]
+      clip_prompts:
+        - "an aerial photograph of a building rooftop or rural house"
+        - "a satellite view of corrugated metal or concrete roofs"
+    - name: "bare ground/path"
+      colour: [220, 195, 130]
+      clip_prompts:
+        - "an aerial photograph of bare soil, a dirt path, or a sandy yard"
+        - "a top-down view of an unpaved road or dry exposed ground"
+    - name: "uncategorised"
+      colour: [180, 180, 180]
+      clip_prompts: []           # never matched directly; assigned when no class is confident
