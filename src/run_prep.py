@@ -67,6 +67,22 @@ def main():
             mouzas.append({"batch": batch, "shp": shp, "name": shp.stem,
                            "tiles_in_aoi": in_aoi, "tiles_missing": missing})
 
+    # Dedup: same mouza stem can appear in multiple batches (e.g. DHAMRAI_11 in
+    # 01.251212 AND 03.251222). Keep the latest batch — date is monotonic with
+    # the batch-folder prefix ('01.', '02.', '03.', ...).
+    latest = {}
+    for m in mouzas:
+        prior = latest.get(m["name"])
+        if prior is None or m["batch"] > prior["batch"]:
+            if prior is not None:
+                print(f"  superseded: {prior['batch']}__{m['name']}  <-  {m['batch']}__{m['name']}")
+            latest[m["name"]] = m
+        else:
+            print(f"  superseded: {m['batch']}__{m['name']}  <-  {prior['batch']}__{m['name']}")
+    if len(latest) != len(mouzas):
+        print(f"  dedup: kept {len(latest)} of {len(mouzas)} shapefiles (newest batch wins)")
+    mouzas = list(latest.values())
+
     if CFG["prep"]["drop_partial"]:
         before = len(mouzas)
         mouzas = [m for m in mouzas if m["tiles_in_aoi"] and not m["tiles_missing"]]
