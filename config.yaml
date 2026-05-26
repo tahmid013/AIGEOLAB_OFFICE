@@ -29,7 +29,7 @@ prep:
   label_batches:
     - "03.251222"
     - "04.251226"
-  max_mouzas: 2        # 2 = validation; raise to 6 then null once v1 trains
+  max_mouzas: 6        # v1.2 default: 5 train + 1 val mouzas (real baseline); set to null for all 16
   drop_partial: true
 
 dataset:
